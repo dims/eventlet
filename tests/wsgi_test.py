@@ -1183,23 +1183,37 @@ class TestHttpd(_TestBase):
     def test_server_connection_timeout_exception(self):
         # Handle connection socket timeouts
         # https://bitbucket.org/eventlet/eventlet/issue/143/
-        # Runs tests.wsgi_test_conntimeout in a separate process.
-        testcode_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            'wsgi_test_conntimeout.py')
-        output = run_python(testcode_path)
-        sections = output.split("SEPERATOR_SENTINEL")
-        # first section is empty
-        self.assertEqual(3, len(sections), output)
-        # if the "BOOM" check fails, it's because our timeout didn't happen
-        # (if eventlet stops using file.readline() to read HTTP headers,
-        # for instance)
-        for runlog in sections[1:]:
-            debug = False if "debug set to: False" in runlog else True
+
+        def test(debug):
+            self.spawn_server(
+                debug=debug,
+                socket_timeout=0.1,
+            )
+
+            sock1 = eventlet.connect(('localhost', self.port))
+            sock1.settimeout(0.2) # safety limit
+
+            # req #1 - normal
+            sock1.send('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+            read_http(sock1)
+
+            # req #2 - timeout
+            sock1.send('GET / HTTP/1.1\r\n')
+            eventlet.sleep(0.1)
+            try:
+                read_http(sock1)
+                assert False, 'Expected ConnectionClosed exception'
+            except ConnectionClosed:
+                pass
+
+            sock1.close()
+            log_content = self.logfile.getvalue()
             if debug:
-                self.assertTrue("timed out" in runlog)
-            self.assertTrue("BOOM" in runlog)
-            self.assertFalse("Traceback" in runlog)
+                assert 'timed out' in log_content
+            assert 'Traceback' not in log_content
+
+        test(debug=False)
+        test(debug=True)
 
     def test_server_socket_timeout(self):
         self.spawn_server(socket_timeout=0.1)
